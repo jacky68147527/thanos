@@ -216,7 +216,7 @@ func (q *querier) Select(_ bool, hints *storage.SelectHints, ms ...*labels.Match
 
 	// TODO(fabxc): this could potentially pushed further down into the store API
 	// to make true streaming possible.
-	sortDedupLabels(resp.seriesSet, q.replicaLabels)
+	trimReplicaLabels(resp.seriesSet, q.replicaLabels)
 
 	set := &promSeriesSet{
 		mint:  q.mint,
@@ -226,28 +226,41 @@ func (q *querier) Select(_ bool, hints *storage.SelectHints, ms ...*labels.Match
 	}
 
 	// The merged series set assembles all potentially-overlapping time ranges
-	// of the same series into a single one. The series are ordered so that equal series
-	// from different replicas are sequential. We can now deduplicate those.
-	return newDedupSeriesSet(set, q.replicaLabels, len(aggrs) == 1 && aggrs[0] == storepb.Aggr_COUNTER), warns, nil
+	// of the same series into a single one.
+	return newDedupSeriesSet(set, len(aggrs) == 1 && aggrs[0] == storepb.Aggr_COUNTER), warns, nil
 }
 
-// sortDedupLabels re-sorts the set so that the same series with different replica
-// labels are coming right after each other.
-func sortDedupLabels(set []storepb.Series, replicaLabels map[string]struct{}) {
-	for _, s := range set {
+// trimReplicaLabels removed replica labels from all series and re-sorts the set so that the same series are coming right after each other.
+func trimReplicaLabels(set []storepb.Series, replicaLabels map[string]struct{}) {
+	for si := range set {
+		lset := set[si].Labels
 		// Move the replica labels to the very end.
-		sort.Slice(s.Labels, func(i, j int) bool {
-			if _, ok := replicaLabels[s.Labels[i].Name]; ok {
+		sort.Slice(lset, func(i, j int) bool {
+			if _, ok := replicaLabels[lset[i].Name]; ok {
 				return false
 			}
-			if _, ok := replicaLabels[s.Labels[j].Name]; ok {
+			if _, ok := replicaLabels[lset[j].Name]; ok {
 				return true
 			}
-			return s.Labels[i].Name < s.Labels[j].Name
+			return lset[i].Name < lset[j].Name
 		})
+
+		// Check how many replica labels are present so that these are removed.
+		var totalToRemove int
+		for i := 0; i < len(replicaLabels); i++ {
+			if len(lset)-i == 0 {
+				break
+			}
+
+			if _, ok := replicaLabels[lset[len(lset)-i-1].Name]; ok {
+				totalToRemove++
+			}
+		}
+		// Strip all present replica labels.
+		set[si].Labels = lset[:len(lset)-totalToRemove]
+
 	}
-	// With the re-ordered label sets, re-sorting all series aligns the same series
-	// from different replicas sequentially.
+	// With the removed label sets, re-sorting all series aligns the same series sequentially.
 	sort.Slice(set, func(i, j int) bool {
 		return storepb.CompareLabels(set[i].Labels, set[j].Labels) < 0
 	})

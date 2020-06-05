@@ -342,9 +342,8 @@ func (it *chunkSeriesIterator) Err() error {
 }
 
 type dedupSeriesSet struct {
-	set           storage.SeriesSet
-	replicaLabels map[string]struct{}
-	isCounter     bool
+	set       storage.SeriesSet
+	isCounter bool
 
 	replicas []storage.Series
 	lset     labels.Labels
@@ -352,8 +351,8 @@ type dedupSeriesSet struct {
 	ok       bool
 }
 
-func newDedupSeriesSet(set storage.SeriesSet, replicaLabels map[string]struct{}, isCounter bool) storage.SeriesSet {
-	s := &dedupSeriesSet{set: set, replicaLabels: replicaLabels, isCounter: isCounter}
+func newDedupSeriesSet(set storage.SeriesSet, isCounter bool) storage.SeriesSet {
+	s := &dedupSeriesSet{set: set, isCounter: isCounter}
 	s.ok = s.set.Next()
 	if s.ok {
 		s.peek = s.set.At()
@@ -365,29 +364,9 @@ func (s *dedupSeriesSet) Next() bool {
 	if !s.ok {
 		return false
 	}
-	// Set the label set we are currently gathering to the peek element
-	// without the replica label if it exists.
-	s.lset = s.peekLset()
+	s.lset = s.peek.Labels()
 	s.replicas = append(s.replicas[:0], s.peek)
 	return s.next()
-}
-
-// peekLset returns the label set of the current peek element stripped from the
-// replica label if it exists.
-func (s *dedupSeriesSet) peekLset() labels.Labels {
-	lset := s.peek.Labels()
-	if len(s.replicaLabels) == 0 {
-		return lset
-	}
-	// Check how many replica labels are present so that these are removed.
-	var totalToRemove int
-	for index := 0; index < len(s.replicaLabels); index++ {
-		if _, ok := s.replicaLabels[lset[len(lset)-index-1].Name]; ok {
-			totalToRemove++
-		}
-	}
-	// Strip all present replica labels.
-	return lset[:len(lset)-totalToRemove]
 }
 
 func (s *dedupSeriesSet) next() bool {
@@ -398,9 +377,9 @@ func (s *dedupSeriesSet) next() bool {
 		return len(s.replicas) > 0
 	}
 	s.peek = s.set.At()
-	nextLset := s.peekLset()
+	nextLset := s.peek.Labels()
 
-	// If the label set modulo the replica label is equal to the current label set
+	// If the label set is equal to the current label set
 	// look for more replicas, otherwise a series is complete.
 	if !labels.Equal(s.lset, nextLset) {
 		return true
